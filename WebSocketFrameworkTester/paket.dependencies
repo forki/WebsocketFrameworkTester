@@ -1,0 +1,6 @@
+source https://nuget.org/api/v2
+
+nuget Fleck
+nuget Suave
+nuget FSharp.Control.Reactive
+nuget Websocket4Net
