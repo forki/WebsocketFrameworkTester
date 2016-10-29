@@ -3,4 +3,5 @@ source https://nuget.org/api/v2
 nuget Fleck
 nuget Suave
 nuget FSharp.Control.Reactive
-nuget Websocket4Net
+nuget WebSocketSharp
+nuget System.Net.Websockets 4.3.0-preview1-24530-04 framework: >= net45 

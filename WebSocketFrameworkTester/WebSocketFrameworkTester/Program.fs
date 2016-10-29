@@ -1,14 +1,15 @@
 ﻿module Program
 
 open Transport
-open WebSocket4Net
+open WebSocketSharp
 open System
 open System.Threading.Tasks
 open FSharp.Control.Reactive
 open System.Reactive.Concurrency
 
-let byteDataToTestSize = 80 * 1024 * 1024
-let amountOfTimesToSend = 20
+let byteDataToTestSize = 8000
+let stringToSend = "TESTESTSERVER"
+let amountOfTimesToSend = 20000
 let byteDataToSend =
     let a = Array.zeroCreate byteDataToTestSize
     for i = 0 to byteDataToTestSize - 1 do
@@ -30,32 +31,79 @@ let createWebsocketClient port =
     let mutable closed = false
 
     let websocket = new WebSocket((sprintf "ws://localhost:%i/" port))
-    websocket.Closed |> Event.add (fun _ -> closed <- true)
+    websocket.OnClose |> Event.add (fun _ -> closed <- true)
     async {
-        let! openSub = websocket.Opened |> Async.AwaitEvent |> Async.StartChild
-        let! errorSub = websocket.Error |> Async.AwaitEvent |> Async.StartChild
-        do websocket.Open()
+        let! openSub = websocket.OnOpen |> Async.AwaitEvent |> Async.StartChild
+        let! errorSub = websocket.OnError |> Async.AwaitEvent |> Async.StartChild
+        do websocket.Connect()
         let! connResult = waitForFirstAsync openSub errorSub
         match connResult with
         | Choice1Of2(success) -> ()
-        | Choice2Of2(err) -> raise err.Exception
+        | Choice2Of2(err) -> failwith err.Message
         }
     |> Async.RunSynchronously
 
-    let receivedStringEvent = websocket.MessageReceived |> Event.map (fun x -> ServerSentMessage.SendStringMessage(x.Message))
-    let receivedBinaryEvent = websocket.DataReceived |> Event.map (fun x -> SendByteMessage(x.Data))
+    let receivedStringEvent = websocket.OnMessage |> Event.filter (fun x -> x.IsText) |> Event.map (fun x -> ServerSentMessage.SendStringMessage(x.Data))
+    let receivedBinaryEvent = websocket.OnMessage |> Event.filter (fun x -> not (x.IsText)) |> Event.map (fun x -> SendByteMessage(x.RawData))
     let messagesObservable = receivedStringEvent |> Event.merge receivedBinaryEvent
 
     { new IClient with
-        member x.Dispose() = websocket.Dispose()
+        member x.Dispose() = websocket.Close()
         member x.Send(ssm) = 
             match ssm with
-            | SendClientMessage.ByteMessage(b) -> websocket.Send(b, 0, b.Length)
+            | SendClientMessage.ByteMessage(b) -> websocket.Send(b)
             | StringMessage(s) -> websocket.Send(s)
         member x.ReceivedMessages = messagesObservable :> IObservable<_> }
 
+open System.Net.WebSockets
+let createDotNetWebsocketClient port = 
+    let wsClient = new ClientWebSocket()
+    let cancellationToken = new System.Threading.CancellationTokenSource()
+    async {
+        let connectTask = wsClient.ConnectAsync((System.Uri(sprintf "ws://localhost:%i" port)), cancellationToken.Token) 
+        return! connectTask |> Async.AwaitTask
+        
+    }
+    |> Async.RunSynchronously
+    |> ignore
+    
+    { new IClient with 
+        member x.Dispose() = wsClient.Dispose() 
+        member x.Send(ssm) = 
+            async {
+                let ct = Async.DefaultCancellationToken
+                let sendTask = 
+                    match ssm with
+                    | SendClientMessage.ByteMessage(b) -> wsClient.SendAsync(ArraySegment<byte>(b), WebSocketMessageType.Binary, true, ct)
+                    | SendClientMessage.StringMessage(s) -> wsClient.SendAsync((ArraySegment<_>(System.Text.Encoding.UTF8.GetBytes(s))), WebSocketMessageType.Text, true, ct)
+                return! sendTask |> Async.AwaitTask
+            }
+            |> Async.RunSynchronously
+        member x.ReceivedMessages = 
+            let subscriberLogic (observer: IObserver<_>) = 
+                let buffer = Array.zeroCreate (byteDataToTestSize * 3)
+                let mutable finished = false
+                while (not finished) do
+                   try
+                       async {
+                            let! ct = Async.CancellationToken
+                            let! result = wsClient.ReceiveAsync((ArraySegment<_>(buffer)), ct) |> Async.AwaitTask
+                            let toSend = 
+                                match result.MessageType with
+                                | WebSocketMessageType.Binary -> ServerSentMessage.SendByteMessage(buffer.[ 0 .. result.Count ])
+                                | WebSocketMessageType.Text -> 
+                                    let s = System.Text.Encoding.UTF8.GetString(buffer, 0, result.Count)
+                                    ServerSentMessage.SendStringMessage(s)
+                            observer.OnNext(toSend)
+                            }
+                       |> Async.RunSynchronously
+                   with
+                   | ex -> finished <- true; observer.OnError(ex)
+                { new IDisposable with member __.Dispose() = () }
+            System.Reactive.Linq.Observable.Create(subscriberLogic) }
+
 let runClientTest port = 
-    let client = createWebsocketClient port 
+    let client = createDotNetWebsocketClient port 
 
     let mutable result = true
     let count = ref 0
@@ -65,12 +113,13 @@ let runClientTest port =
         client.ReceivedMessages
         |> Observable.subscribeOn Scheduler.Default
         |> Observable.subscribe (fun x -> 
+            let nc =  System.Threading.Interlocked.Increment(count)
             match x with
             | ServerSentMessage.SendByteMessage(b) -> 
-                let c = System.Threading.Interlocked.Increment(count)
-                printfn "Sending %i update" c
-                if result = true then result <- byteDataToSend = b
-            | ServerSentMessage.SendStringMessage(_) -> result <- false)
+                printfn "Byte message received %i" nc
+            | ServerSentMessage.SendStringMessage(s) -> printfn "String message received [Message %s, Count: %i]" s nc
+            
+            if nc = amountOfTimesToSend then finishedEvent.Trigger())
 
     async {
         let! eventWaiting = finishedEvent.Publish |> Async.AwaitEvent |> Async.StartChild
@@ -78,8 +127,6 @@ let runClientTest port =
         do! eventWaiting
     }
     |> Async.RunSynchronously
-
-    result
 
 [<EntryPoint>]
 let main argv = 
@@ -93,16 +140,9 @@ let main argv =
         server.InMessageObservable
         |> Observable.subscribe (fun (cc, message) -> 
             for i = 1 to amountOfTimesToSend do
-                cc.Send(ServerSentMessage.SendByteMessage(byteDataToSend))
+                cc.Send(ServerSentMessage.SendStringMessage(stringToSend))
             )
     
-    let result = 
-        Async.Parallel (seq { for i = 1 to Environment.ProcessorCount do yield async { return runClientTest port } })
-        |> Async.RunSynchronously
+    runClientTest port
 
-
-    if result |> Array.forall id
-       then 
-            printfn "Test failed"
-            1 
-       else 0
+    0
