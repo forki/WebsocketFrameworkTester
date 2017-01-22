@@ -44,14 +44,17 @@ let createWebsocketClient port =
     |> Async.RunSynchronously
 
     let receivedStringEvent = websocket.OnMessage |> Event.filter (fun x -> x.IsText) |> Event.map (fun x -> ServerSentMessage.SendStringMessage(x.Data))
-    let receivedBinaryEvent = websocket.OnMessage |> Event.filter (fun x -> not (x.IsText)) |> Event.map (fun x -> SendByteMessage(x.RawData))
+    let receivedBinaryEvent = websocket.OnMessage |> Event.filter (fun x -> not (x.IsText)) |> Event.map (fun x -> SendByteMessage(ArraySegment(x.RawData)))
     let messagesObservable = receivedStringEvent |> Event.merge receivedBinaryEvent
 
     { new IClient with
         member x.Dispose() = websocket.Close()
         member x.Send(ssm) = 
             match ssm with
-            | SendClientMessage.ByteMessage(b) -> websocket.Send(b)
+            | SendClientMessage.ByteMessage(b) -> 
+                // Doesn't support byte segments
+                let newArrayToSend = b.Array.[ b.Offset .. (b.Offset + b.Count) ]
+                websocket.Send(newArrayToSend)
             | StringMessage(s) -> websocket.Send(s)
         member x.ReceivedMessages = messagesObservable :> IObservable<_> }
 
@@ -74,7 +77,7 @@ let createDotNetWebsocketClient port =
                 let ct = Async.DefaultCancellationToken
                 let sendTask = 
                     match ssm with
-                    | SendClientMessage.ByteMessage(b) -> wsClient.SendAsync(ArraySegment<byte>(b), WebSocketMessageType.Binary, true, ct)
+                    | SendClientMessage.ByteMessage(b) -> wsClient.SendAsync(b, WebSocketMessageType.Binary, true, ct)
                     | SendClientMessage.StringMessage(s) -> wsClient.SendAsync((ArraySegment<_>(System.Text.Encoding.UTF8.GetBytes(s))), WebSocketMessageType.Text, true, ct)
                 return! sendTask |> Async.AwaitTask
             }
@@ -87,12 +90,12 @@ let createDotNetWebsocketClient port =
                    try
                        async {
                             let! ct = Async.CancellationToken
-                            let! result = wsClient.ReceiveAsync((ArraySegment<_>(buffer)), ct) |> Async.AwaitTask
+                            let! receiveResult = wsClient.ReceiveAsync((ArraySegment<_>(buffer)), ct) |> Async.AwaitTask
                             let toSend = 
-                                match result.MessageType with
-                                | WebSocketMessageType.Binary -> ServerSentMessage.SendByteMessage(buffer.[ 0 .. result.Count ])
+                                match receiveResult.MessageType with
+                                | WebSocketMessageType.Binary -> ServerSentMessage.SendByteMessage(ArraySegment(buffer, 0, receiveResult.Count))
                                 | WebSocketMessageType.Text -> 
-                                    let s = System.Text.Encoding.UTF8.GetString(buffer, 0, result.Count)
+                                    let s = System.Text.Encoding.UTF8.GetString(buffer, 0, receiveResult.Count)
                                     ServerSentMessage.SendStringMessage(s)
                             observer.OnNext(toSend)
                             }
@@ -103,7 +106,8 @@ let createDotNetWebsocketClient port =
             System.Reactive.Linq.Observable.Create(subscriberLogic) }
 
 let runClientTest port = 
-    let client = createDotNetWebsocketClient port 
+    //let client = createDotNetWebsocketClient port 
+    let client = TcpTransport.createClient (System.Net.IPAddress.Loopback) port 
 
     let mutable result = true
     let count = ref 0
@@ -131,16 +135,23 @@ let runClientTest port =
 [<EntryPoint>]
 let main argv = 
 
-    let port = 9000
+    let port = 9001
 
     //use server = FleckTransport.createFleckTransport port
-    use server = SuaveTransport.createSuaveTransport (uint16 port)
+    //use server = SuaveTransport.createSuaveTransport (uint16 port)
+    use server = TcpTransport.createServer port
 
     let messageHandler = 
         server.InMessageObservable
         |> Observable.subscribe (fun (cc, message) -> 
-            for i = 1 to amountOfTimesToSend do
-                cc.Send(ServerSentMessage.SendStringMessage(stringToSend))
+            let rec runAsync currentCount = async {
+                if currentCount >= amountOfTimesToSend
+                then return ()
+                else 
+                    do! cc.Send(ServerSentMessage.SendStringMessage(stringToSend))
+                    return! runAsync (currentCount + 1)
+                }
+            runAsync 0 |> Async.Start
             )
     
     runClientTest port

@@ -10,7 +10,7 @@ let createFleckTransport (port: int) =
 
     let messageSubject = new Subject<_>()
 
-    let onBinaryHandler conn (x: byte[]) = messageSubject.OnNext (conn, ReceivedByteMessage x)
+    let onBinaryHandler conn (x: byte[]) = messageSubject.OnNext (conn, ReceivedByteMessage (ArraySegment(x)))
     let onStringMessage conn x = messageSubject.OnNext (conn, ReceivedStringMessage x)
     let onClose conn  = messageSubject.OnNext (conn, ConnectionClosed)
     let onError conn exn = messageSubject.OnNext (conn, Error exn)
@@ -23,9 +23,8 @@ let createFleckTransport (port: int) =
                 member x.Send msg = 
                     match msg with
                     | SendStringMessage(s) -> webSocketConn.Send(s) |> Async.AwaitIAsyncResult
-                    | SendByteMessage(b) -> webSocketConn.Send(b) |> Async.AwaitIAsyncResult
+                    | SendByteMessage(b) -> webSocketConn.Send(b.Array) |> Async.AwaitIAsyncResult
                     |> Async.Ignore
-                    |> Async.RunSynchronously
             }
         
         webSocketConn.OnBinary <- (Action<_> (onBinaryHandler connection))

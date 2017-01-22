@@ -31,10 +31,10 @@ let createSuaveTransport port =
             new IServerClient with
                 member x.Send stcm = 
                     match stcm with
-                    | ServerSentMessage.SendByteMessage(s) -> toSend.Post (Opcode.Binary, s, true)
+                    | ServerSentMessage.SendByteMessage(s) -> async { toSend.Post (Opcode.Binary, s, true) }
                     | ServerSentMessage.SendStringMessage(s) ->
                         let ba = System.Text.Encoding.UTF8.GetBytes(s)
-                        toSend.Post (Opcode.Text, ba, true)
+                        async { toSend.Post (Opcode.Text, (ByteSegment(ba)), true) }
             }
 
         receiveMessageSubject.Trigger(serverClient, ServerReceivedMessage.Open)
@@ -50,18 +50,18 @@ let createSuaveTransport port =
                 | Binary,data,true -> 
                     receiveMessageSubject.Trigger(
                         serverClient, 
-                        ServerReceivedMessage.ReceivedByteMessage(data))         
+                        ServerReceivedMessage.ReceivedByteMessage(ByteSegment(data)))         
                 | Ping,_,_ -> 
-                    toSend.Post (Pong, [||], true)
+                    toSend.Post (Pong, (ByteSegment()), true)
                 | Close,_,_ -> 
-                    toSend.Post (Close, [||], true)
+                    toSend.Post (Close, (ByteSegment()), true)
                     loop <- false
                 | _ -> ()
         }
 
     let serverConfig = { 
         defaultConfig with 
-            SuaveConfig.bindings = [ HttpBinding.mk Protocol.HTTP (System.Net.IPAddress.Parse "0.0.0.0") port ] 
+            SuaveConfig.bindings = [ HttpBinding.create Protocol.HTTP (System.Net.IPAddress.Parse "0.0.0.0") port ] 
             }
 
     let webPart = 
