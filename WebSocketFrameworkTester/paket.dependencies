@@ -1,5 +1,5 @@
 source https://nuget.org/api/v2
-
+framework: >= net40
 nuget Fleck
 nuget Suave
 nuget FSharp.Control.Reactive

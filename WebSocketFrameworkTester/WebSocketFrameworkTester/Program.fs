@@ -78,7 +78,7 @@ let createDotNetWebsocketClient port =
                 let sendTask = 
                     match ssm with
                     | SendClientMessage.ByteMessage(b) -> wsClient.SendAsync(b, WebSocketMessageType.Binary, true, ct)
-                    | SendClientMessage.StringMessage(s) -> wsClient.SendAsync((ArraySegment<_>(System.Text.Encoding.UTF8.GetBytes(s))), WebSocketMessageType.Text, true, ct)
+                    | SendClientMessage.StringMessage(s) -> wsClient.SendAsync((ArraySegment(System.Text.Encoding.UTF8.GetBytes(s))), WebSocketMessageType.Text, true, ct)
                 return! sendTask |> Async.AwaitTask
             }
             |> Async.RunSynchronously
@@ -93,11 +93,13 @@ let createDotNetWebsocketClient port =
                             let! receiveResult = wsClient.ReceiveAsync((ArraySegment<_>(buffer)), ct) |> Async.AwaitTask
                             let toSend = 
                                 match receiveResult.MessageType with
-                                | WebSocketMessageType.Binary -> ServerSentMessage.SendByteMessage(ArraySegment(buffer, 0, receiveResult.Count))
+                                | WebSocketMessageType.Binary -> Some (ServerSentMessage.SendByteMessage(ArraySegment(buffer, 0, receiveResult.Count)))
                                 | WebSocketMessageType.Text -> 
                                     let s = System.Text.Encoding.UTF8.GetString(buffer, 0, receiveResult.Count)
-                                    ServerSentMessage.SendStringMessage(s)
-                            observer.OnNext(toSend)
+                                    Some (ServerSentMessage.SendStringMessage(s))
+                                | WebSocketMessageType.Close -> None
+                                | _ -> failwith "No case"
+                            match toSend with | Some(x) -> observer.OnNext(x) | None -> ()
                             }
                        |> Async.RunSynchronously
                    with
@@ -106,29 +108,34 @@ let createDotNetWebsocketClient port =
             System.Reactive.Linq.Observable.Create(subscriberLogic) }
 
 let runClientTest port = 
-    //let client = createDotNetWebsocketClient port 
+    //let client = createWebsocketClient port 
     let client = TcpTransport.createClient (System.Net.IPAddress.Loopback) port 
 
     let mutable result = true
     let count = ref 0
     let finishedEvent = Event<_>()
 
+    let stopWatch = System.Diagnostics.Stopwatch.StartNew()
+
     let checkingSub = 
         client.ReceivedMessages
         |> Observable.subscribeOn Scheduler.Default
         |> Observable.subscribe (fun x -> 
             let nc =  System.Threading.Interlocked.Increment(count)
+            (*
             match x with
             | ServerSentMessage.SendByteMessage(b) -> 
                 printfn "Byte message received %i" nc
             | ServerSentMessage.SendStringMessage(s) -> printfn "String message received [Message %s, Count: %i]" s nc
-            
+            *)
             if nc = amountOfTimesToSend then finishedEvent.Trigger())
 
     async {
         let! eventWaiting = finishedEvent.Publish |> Async.AwaitEvent |> Async.StartChild
         do client.Send (SendClientMessage.StringMessage("TESTTEST"))
         do! eventWaiting
+        stopWatch.Stop()
+        printfn "Test finished [Time taken milliseconds: %i; AmountOfTimes: %i, Update per sec: %f]" stopWatch.ElapsedMilliseconds amountOfTimesToSend ((float stopWatch.ElapsedMilliseconds) / (float amountOfTimesToSend))
     }
     |> Async.RunSynchronously
 

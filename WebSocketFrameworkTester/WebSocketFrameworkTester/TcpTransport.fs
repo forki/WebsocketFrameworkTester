@@ -11,6 +11,18 @@ open System.Reactive.Linq
 
 let headerLength = 1 + sizeof<int32>
 
+let asyncRead (stream: NetworkStream) (byteSegment: ArraySegment<byte>) byteCountToRead = 
+    if byteCountToRead > byteSegment.Count then failwith "Bytes to read requested greater than buffer size"
+    let rec readLoop currentOffset leftoverCount = async {
+        let! bytesRead = stream.ReadAsync(byteSegment.Array, currentOffset, leftoverCount) |> Async.AwaitTask
+        let newCount = leftoverCount - bytesRead
+        if newCount = 0
+        then return ()
+        else return! readLoop (currentOffset + bytesRead) newCount
+        }
+    
+    readLoop byteSegment.Offset byteCountToRead
+
 let asyncWrite (stream: NetworkStream) (byteSegment: ArraySegment<byte>) = stream.AsyncWrite(byteSegment.Array, byteSegment.Offset, byteSegment.Count)
 
 let createServer port = 
@@ -33,7 +45,6 @@ let createServer port =
             let remoteClientInfo = acceptedConn.RemoteEndPoint;
             printfn "Client connected on %O" remoteClientInfo
             let networkStream = new NetworkStream(acceptedConn, false)
-            let stringStreamWriter = new StreamWriter(networkStream)
 
             let mutable clientHeaderBuffer = Array.zeroCreate headerLength
             let mutable serverToClientBuffer = Array.zeroCreate 2000 
@@ -49,29 +60,29 @@ let createServer port =
                         | SendStringMessage str -> 
                             async {
                                 do! asyncWrite networkStream ([| 1uy |] |> ArraySegment)
-                                do! asyncWrite networkStream (BitConverter.GetBytes(str.Length) |> ArraySegment)
-                                do! stringStreamWriter.WriteAsync(str) |> Async.AwaitTask
-                                do! stringStreamWriter.FlushAsync() |> Async.AwaitTask }   
+                                let stringBytes = System.Text.Encoding.UTF8.GetBytes(str)
+                                do! asyncWrite networkStream (BitConverter.GetBytes(stringBytes.Length) |> ArraySegment)
+                                do! asyncWrite networkStream (ArraySegment(stringBytes)) }   
                 }
 
-            let stringStreamReader = new StreamReader(networkStream)
             let mutable charToStringArray = Array.zeroCreate 2000
             let mutable bufferByteArray = Array.zeroCreate 2000
             let messageTypeAndHeaderArray = Array.zeroCreate headerLength
 
             let rec receiveLoop() = async {
-                do! networkStream.ReadAsync(messageTypeAndHeaderArray, 0, headerLength) |> Async.AwaitTask |> Async.Ignore
+                do! asyncRead networkStream (ArraySegment(messageTypeAndHeaderArray)) headerLength
                 let length = BitConverter.ToInt32(messageTypeAndHeaderArray, 1)
                 match messageTypeAndHeaderArray.[0] with 
                 // Byte Message
                 | 0uy -> 
-                    let! bytesInResult = networkStream.ReadAsync(bufferByteArray, 0, length) |> Async.AwaitTask
-                    observer.OnNext(serverClient, (ReceivedByteMessage (ArraySegment(bufferByteArray, 0, bytesInResult))))
+                    do! asyncRead networkStream (ArraySegment(bufferByteArray)) length
+                    observer.OnNext(serverClient, (ReceivedByteMessage (ArraySegment(bufferByteArray, 0, length))))
                 | 1uy -> 
                     if charToStringArray.Length < length then charToStringArray <- Array.zeroCreate length
-                    let! charactersRead = stringStreamReader.ReadAsync(charToStringArray, 0, length) |> Async.AwaitTask
-                    let newString = String(charToStringArray, 0, length)
-                    observer.OnNext(serverClient, (ServerReceivedMessage.ReceivedStringMessage newString))
+
+                    do! asyncRead networkStream (ArraySegment(charToStringArray)) length
+                    let string = System.Text.Encoding.UTF8.GetString(charToStringArray, 0, length)
+                    observer.OnNext(serverClient, (ServerReceivedMessage.ReceivedStringMessage string))
                 | _ -> failwith "Invalid flag for message type received on protocol"
                         
                 do! receiveLoop()
@@ -99,22 +110,20 @@ let createClient (address: IPAddress) port =
     let messageTypeAndLengthArrayForReading = Array.zeroCreate headerLength
     let mutable incomingBuffer = Array.zeroCreate 2000
     let mutable charIncomingBuffer = Array.zeroCreate 2000
-    let stringWriter = new StreamWriter(stream)
-    let stringReader = new StreamReader(stream)
 
     let rec clientLoop (observer: IObserver<_>) = async {
-        let! header = stream.ReadAsync (messageTypeAndLengthArrayForReading, 0, headerLength) |> Async.AwaitTask
+        let! header = asyncRead stream (ArraySegment(messageTypeAndLengthArrayForReading)) headerLength
         let length = BitConverter.ToInt32(messageTypeAndLengthArrayForReading, 1)
 
         match messageTypeAndLengthArrayForReading.[0] with
         | 0uy -> 
             if incomingBuffer.Length < length then incomingBuffer <- Array.zeroCreate length
-            let! bytesRead = stream.ReadAsync(incomingBuffer, 0, length)
+            let! bytesRead = asyncRead stream (ArraySegment(incomingBuffer)) length
             observer.OnNext(ServerSentMessage.SendByteMessage (ArraySegment(incomingBuffer, 0, length)))
         | 1uy ->
             if charIncomingBuffer.Length < length then charIncomingBuffer <- Array.zeroCreate length
-            let! stringBytesRead = stringReader.ReadAsync(charIncomingBuffer, 0, length)
-            let stringResult = new String(charIncomingBuffer, 0, length)
+            do! asyncRead stream (ArraySegment(charIncomingBuffer)) length
+            let stringResult = System.Text.Encoding.UTF8.GetString(charIncomingBuffer, 0, length)
             observer.OnNext(SendStringMessage stringResult)
         | _ -> failwith "Unexpected protocol when receiving data from server"
 
@@ -133,10 +142,10 @@ let createClient (address: IPAddress) port =
                 stream.Write(b.Array, b.Offset, b.Count)
             | StringMessage(s) -> 
                 stream.WriteByte(1uy)
-                let lengthArray = BitConverter.GetBytes(s.Length)
+                let stringBytes = System.Text.Encoding.UTF8.GetBytes(s)
+                let lengthArray = BitConverter.GetBytes(stringBytes.Length)
                 stream.Write(lengthArray, 0, lengthArray.Length)
-                stringWriter.Write(s)
-                stringWriter.Flush()
+                stream.Write(stringBytes, 0, stringBytes.Length)
         member x.ReceivedMessages = 
             Observable.Create(fun (observer: IObserver<_>) -> 
                 let cts = new CancellationTokenSource()
