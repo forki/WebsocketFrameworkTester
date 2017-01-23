@@ -9,7 +9,7 @@ open System.Reactive.Concurrency
 
 let byteDataToTestSize = 8000
 let stringToSend = "TESTESTSERVER"
-let amountOfTimesToSend = 20000
+let amountOfTimesToSend = 50000
 let byteDataToSend =
     let a = Array.zeroCreate byteDataToTestSize
     for i = 0 to byteDataToTestSize - 1 do
@@ -115,7 +115,7 @@ let runClientTest port =
     let count = ref 0
     let finishedEvent = Event<_>()
 
-    let stopWatch = System.Diagnostics.Stopwatch.StartNew()
+    let stopWatch = System.Diagnostics.Stopwatch()
 
     let checkingSub = 
         client.ReceivedMessages
@@ -128,15 +128,21 @@ let runClientTest port =
                 printfn "Byte message received %i" nc
             | ServerSentMessage.SendStringMessage(s) -> printfn "String message received [Message %s, Count: %i]" s nc
             *)
-            if nc = amountOfTimesToSend then finishedEvent.Trigger())
+            if nc = amountOfTimesToSend then count := 0; finishedEvent.Trigger())
+    
+    let rec test continueRunning = 
+        async {
+            let! eventWaiting = finishedEvent.Publish |> Async.AwaitEvent |> Async.StartChild
+            stopWatch.Start()
+            do client.Send (SendClientMessage.StringMessage("TESTTEST"))
+            do! eventWaiting
+            stopWatch.Stop()
+            printfn "Test finished [Time taken milliseconds: %i; AmountOfTimes: %i, Update per sec: %f]" stopWatch.ElapsedMilliseconds amountOfTimesToSend ((float stopWatch.ElapsedMilliseconds) / (float amountOfTimesToSend))
+            stopWatch.Reset()
+            if continueRunning then return! test false else return ()
+        }
 
-    async {
-        let! eventWaiting = finishedEvent.Publish |> Async.AwaitEvent |> Async.StartChild
-        do client.Send (SendClientMessage.StringMessage("TESTTEST"))
-        do! eventWaiting
-        stopWatch.Stop()
-        printfn "Test finished [Time taken milliseconds: %i; AmountOfTimes: %i, Update per sec: %f]" stopWatch.ElapsedMilliseconds amountOfTimesToSend ((float stopWatch.ElapsedMilliseconds) / (float amountOfTimesToSend))
-    }
+    test true
     |> Async.RunSynchronously
 
 [<EntryPoint>]
@@ -162,5 +168,6 @@ let main argv =
             )
     
     runClientTest port
+    // runClientTest port // Run again due to JIT
 
     0

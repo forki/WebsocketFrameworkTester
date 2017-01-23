@@ -110,6 +110,7 @@ let createClient (address: IPAddress) port =
     let messageTypeAndLengthArrayForReading = Array.zeroCreate headerLength
     let mutable incomingBuffer = Array.zeroCreate 2000
     let mutable charIncomingBuffer = Array.zeroCreate 2000
+    let mutable toSendBuffer : byte array = Array.zeroCreate 2000
 
     let rec clientLoop (observer: IObserver<_>) = async {
         let! header = asyncRead stream (ArraySegment(messageTypeAndLengthArrayForReading)) headerLength
@@ -142,10 +143,10 @@ let createClient (address: IPAddress) port =
                 stream.Write(b.Array, b.Offset, b.Count)
             | StringMessage(s) -> 
                 stream.WriteByte(1uy)
-                let stringBytes = System.Text.Encoding.UTF8.GetBytes(s)
-                let lengthArray = BitConverter.GetBytes(stringBytes.Length)
+                let stringBytes = System.Text.Encoding.UTF8.GetBytes(s, 0, s.Length, toSendBuffer, 0)
+                let lengthArray = BitConverter.GetBytes(stringBytes)
                 stream.Write(lengthArray, 0, lengthArray.Length)
-                stream.Write(stringBytes, 0, stringBytes.Length)
+                stream.Write(toSendBuffer, 0, stringBytes)
         member x.ReceivedMessages = 
             Observable.Create(fun (observer: IObserver<_>) -> 
                 let cts = new CancellationTokenSource()
