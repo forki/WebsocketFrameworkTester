@@ -59,10 +59,12 @@ let createServer port =
                                 do! asyncWrite networkStream byteSegment }
                         | SendStringMessage str -> 
                             async {
+                                let lengthRequired = System.Text.Encoding.UTF8.GetMaxByteCount(str.Length)
+                                if serverToClientBuffer.Length < lengthRequired then serverToClientBuffer <- Array.zeroCreate lengthRequired 
+                                let bytesWritten = System.Text.Encoding.UTF8.GetBytes(str, 0, str.Length, serverToClientBuffer, 0)
                                 do! asyncWrite networkStream ([| 1uy |] |> ArraySegment)
-                                let stringBytes = System.Text.Encoding.UTF8.GetBytes(str)
-                                do! asyncWrite networkStream (BitConverter.GetBytes(stringBytes.Length) |> ArraySegment)
-                                do! asyncWrite networkStream (ArraySegment(stringBytes)) }   
+                                do! asyncWrite networkStream (BitConverter.GetBytes(bytesWritten) |> ArraySegment)
+                                do! asyncWrite networkStream (ArraySegment(serverToClientBuffer, 0, bytesWritten)) }   
                 }
 
             let mutable charToStringArray = Array.zeroCreate 2000
@@ -122,7 +124,7 @@ let createClient (address: IPAddress) port =
             let! bytesRead = asyncRead stream (ArraySegment(incomingBuffer)) length
             observer.OnNext(ServerSentMessage.SendByteMessage (ArraySegment(incomingBuffer, 0, length)))
         | 1uy ->
-            if charIncomingBuffer.Length < length then charIncomingBuffer <- Array.zeroCreate length
+            if charIncomingBuffer.Length < length then charIncomingBuffer <- Array.zeroCreate (length)
             do! asyncRead stream (ArraySegment(charIncomingBuffer)) length
             let stringResult = System.Text.Encoding.UTF8.GetString(charIncomingBuffer, 0, length)
             observer.OnNext(SendStringMessage stringResult)

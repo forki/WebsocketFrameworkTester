@@ -3,3 +3,8 @@ Fleck
 FSharp.Control.Reactive
 WebSocketSharp
 System.Net.Websockets
+DotNetty.Common
+DotNetty.Buffers
+DotNetty.Transport
+DotNetty.Codecs
+DotNetty.Handlers

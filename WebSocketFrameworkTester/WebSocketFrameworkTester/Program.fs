@@ -8,7 +8,7 @@ open FSharp.Control.Reactive
 open System.Reactive.Concurrency
 
 let byteDataToTestSize = 8000
-let stringToSend = "TESTESTSERVER"
+let stringToSend = "Hello World TCP Transport" //String.init 1000 (fun x -> (x % 9).ToString())
 let amountOfTimesToSend = 50000
 let byteDataToSend =
     let a = Array.zeroCreate byteDataToTestSize
@@ -110,6 +110,7 @@ let createDotNetWebsocketClient port =
 let runClientTest port = 
     //let client = createWebsocketClient port 
     let client = TcpTransport.createClient (System.Net.IPAddress.Loopback) port 
+    //let client = DotNettyTransport.createClient port
 
     let mutable result = true
     let count = ref 0
@@ -137,7 +138,7 @@ let runClientTest port =
             do client.Send (SendClientMessage.StringMessage("TESTTEST"))
             do! eventWaiting
             stopWatch.Stop()
-            printfn "Test finished [Time taken milliseconds: %i; AmountOfTimes: %i, Update per sec: %f]" stopWatch.ElapsedMilliseconds amountOfTimesToSend ((float stopWatch.ElapsedMilliseconds) / (float amountOfTimesToSend))
+            printfn "Test finished [Time taken milliseconds: %i; AmountOfTimes: %i, Update per msec: %f]" stopWatch.ElapsedMilliseconds amountOfTimesToSend ((float amountOfTimesToSend) / (float stopWatch.ElapsedMilliseconds))
             stopWatch.Reset()
             if continueRunning then return! test false else return ()
         }
@@ -153,6 +154,7 @@ let main argv =
     //use server = FleckTransport.createFleckTransport port
     //use server = SuaveTransport.createSuaveTransport (uint16 port)
     use server = TcpTransport.createServer port
+    //use server = DotNettyTransport.createServer port
 
     let messageHandler = 
         server.InMessageObservable
