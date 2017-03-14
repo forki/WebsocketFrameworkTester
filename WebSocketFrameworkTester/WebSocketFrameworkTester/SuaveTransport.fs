@@ -35,6 +35,7 @@ let createSuaveTransport port =
                     | ServerSentMessage.SendStringMessage(s) ->
                         let ba = System.Text.Encoding.UTF8.GetBytes(s)
                         async { toSend.Post (Opcode.Text, (ByteSegment(ba)), true) }
+                member x.Flush() = async { return () }
             }
 
         receiveMessageSubject.Trigger(serverClient, ServerReceivedMessage.Open)
@@ -62,6 +63,7 @@ let createSuaveTransport port =
     let serverConfig = { 
         defaultConfig with 
             SuaveConfig.bindings = [ HttpBinding.create Protocol.HTTP (System.Net.IPAddress.Parse "0.0.0.0") port ] 
+            SuaveConfig.tcpServerFactory = Suave.BasicTcpServerFactory() //Suave.DotNetty.DotNettyServerFactory()
             }
 
     let webPart = 

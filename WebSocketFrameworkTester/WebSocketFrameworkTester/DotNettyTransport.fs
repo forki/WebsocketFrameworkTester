@@ -37,9 +37,9 @@ let channelRead (clientToServerFeed: Event<_>) (context: IChannelHandlerContext,
                 match ssm with 
                 | ServerSentMessage.SendByteMessage bm -> 
                     failwith "Lets not test byte messages yet"
-                | ServerSentMessage.SendStringMessage s -> do! processStringToSend s
-                }
-    }
+                | ServerSentMessage.SendStringMessage s -> do! processStringToSend s }
+            member x.Flush() = async { do context.Flush() }
+        }
     
     match message with 
     | null -> ()

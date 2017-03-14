@@ -25,6 +25,7 @@ let createFleckTransport (port: int) =
                     | SendStringMessage(s) -> webSocketConn.Send(s) |> Async.AwaitIAsyncResult
                     | SendByteMessage(b) -> webSocketConn.Send(b.Array) |> Async.AwaitIAsyncResult
                     |> Async.Ignore
+                member x.Flush() = async { return () }
             }
         
         webSocketConn.OnBinary <- (Action<_> (onBinaryHandler connection))

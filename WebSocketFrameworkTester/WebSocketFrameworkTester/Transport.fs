@@ -15,6 +15,7 @@ type ServerSentMessage =
 
 type IServerClient =
     abstract member Send: ServerSentMessage -> Async<unit>
+    abstract member Flush: unit -> Async<unit>
  
 type IServerTransport = 
     inherit IDisposable

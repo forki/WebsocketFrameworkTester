@@ -51,7 +51,7 @@ NUGET
       System.Security.Cryptography.Primitives (>= 4.3) - framework: >= net46
       System.Security.Cryptography.X509Certificates (>= 4.3) - framework: >= net46
       System.Threading.Timer (>= 4.3) - framework: >= net451
-    Suave (2.0.2)
+    Suave (2.0.4)
       FSharp.Core (>= 4.0.0.1)
     System.AppContext (4.3) - framework: >= net46
     System.Collections.Concurrent (4.3) - framework: >= net451
