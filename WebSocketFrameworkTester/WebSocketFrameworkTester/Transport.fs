@@ -4,24 +4,25 @@ open System
 
 type ServerReceivedMessage = 
     | ReceivedStringMessage of string
-    | ReceivedByteMessage of byte[]
+    | ReceivedByteMessage of ArraySegment<byte>
     | ConnectionClosed
     | Error of exn
     | Open
 
 type ServerSentMessage =  
     | SendStringMessage of string
-    | SendByteMessage of byte[]
+    | SendByteMessage of ArraySegment<byte>
 
 type IServerClient =
-    abstract member Send: ServerSentMessage -> unit
+    abstract member Send: ServerSentMessage -> Async<unit>
+    abstract member Flush: unit -> Async<unit>
  
 type IServerTransport = 
     inherit IDisposable
     abstract member InMessageObservable: IObservable<IServerClient * ServerReceivedMessage> with get
 
 type SendClientMessage = 
-    | ByteMessage of byte[]
+    | ByteMessage of ArraySegment<byte>
     | StringMessage of string
 
 type IClient = 

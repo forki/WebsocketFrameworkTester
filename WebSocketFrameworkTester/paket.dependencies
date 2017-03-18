@@ -1,7 +1,12 @@
 source https://nuget.org/api/v2
-
+framework: >= net40
 nuget Fleck
 nuget Suave
 nuget FSharp.Control.Reactive
-nuget WebSocketSharp
+nuget WebSocketSharp prerelease
 nuget System.Net.Websockets 4.3.0-preview1-24530-04 framework: >= net45 
+nuget DotNetty.Common
+nuget DotNetty.Buffers
+nuget DotNetty.Transport
+nuget DotNetty.Handlers
+nuget DotNetty.Codecs
